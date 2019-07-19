@@ -3,6 +3,7 @@
 # Licensed under the MIT License. See License.txt in the project root for license information.
 # --------------------------------------------------------------------------------------------
 
+from knack.log import get_logger
 import os
 import zipfile
 from azure.cli.core.commands.client_factory import get_mgmt_service_client
@@ -11,6 +12,8 @@ from ._constants import (NETCORE_VERSION_DEFAULT, NETCORE_VERSIONS, NODE_VERSION
                          NODE_VERSIONS, NETCORE_RUNTIME_NAME, NODE_RUNTIME_NAME, DOTNET_RUNTIME_NAME,
                          DOTNET_VERSION_DEFAULT, DOTNET_VERSIONS, STATIC_RUNTIME_NAME,
                          PYTHON_RUNTIME_NAME, PYTHON_VERSION_DEFAULT, LINUX_SKU_DEFAULT)
+
+logger = get_logger(__name__)
 
 
 def _resource_client_factory(cli_ctx, **_):
@@ -94,14 +97,6 @@ def _check_resource_group_supports_os(cmd, rg_name, is_linux):
         if is_linux and not item.reserved:
             return False
         if not is_linux and item.reserved:
-            return False
-    return True
-
-
-def should_create_new_app(cmd, rg_name, app_name):
-    client = web_client_factory(cmd.cli_ctx)
-    for item in list(client.web_apps.list_by_resource_group(rg_name)):
-        if item.name.lower() == app_name.lower():
             return False
     return True
 
@@ -281,3 +276,28 @@ def should_create_new_rg(cmd, rg_name, is_linux):
             _check_resource_group_supports_os(cmd, rg_name, is_linux)):
         return False
     return True
+
+
+def should_create_new_app(cmd, name):
+    """ This is used by az webapp up to verify if a site needs to be created or should just be deployed"""
+    client = web_client_factory(cmd.cli_ctx)
+    site_availability = client.check_name_availability(name, 'Microsoft.Web/sites')
+    # check availability returns true to name_available  == site does not exist
+    return site_availability.name_available
+
+
+def get_profile_username():
+    from azure.cli.core._profile import Profile
+    user = Profile().get_current_account_user()
+    user = user.split('@', 1)[0]
+    if len(user.split('#', 1)) > 1:  # on cloudShell user is in format live.com#user@domain.com
+        user = user.split('#', 1)[1]
+    logger.info("UserPrefix to use '%s'", user)
+    return user
+
+
+def get_default_rg_name(user, os, loc):
+    logger.info('Using default ResourceGroup value')
+    return "{}_rg_{}_{}".format(user, os, loc.replace(" ", "").lower())
+
+

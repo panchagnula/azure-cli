@@ -62,8 +62,8 @@ from ._client_factory import web_client_factory, ex_handler_factory
 from ._appservice_utils import _generic_site_operation
 from .utils import _normalize_sku, get_sku_name
 from ._create_util import (zip_contents_from_dir, get_runtime_version_details, create_resource_group,
-                           should_create_new_rg, set_location, should_create_new_app,
-                           get_lang_from_content, get_num_apps_in_asp)
+                           should_create_new_rg, set_location, should_create_new_app, get_profile_username,
+                           get_lang_from_content, get_num_apps_in_asp, get_default_rg_name)
 from ._constants import (NODE_RUNTIME_NAME, OS_DEFAULT, STATIC_RUNTIME_NAME, PYTHON_RUNTIME_NAME,
                          RUNTIME_TO_IMAGE, NODE_VERSION_DEFAULT)
 
@@ -2959,6 +2959,37 @@ def webapp_up(cmd, name, resource_group_name=None, plan=None,  # pylint: disable
         _configure_default_logging(cmd, rg_name, name)
         return get_streaming_log(cmd, rg_name, name)
     return create_json
+
+
+def webapp_up_new(cmd, name, resource_group_name=None, plan=None,  # pylint: disable=too-many-statements, too-many-branches
+              location=None, sku=None, dryrun=False, logs=False, launch_browser=False):
+    import os
+    client = web_client_factory(cmd.cli_ctx)
+    _create_new_app = should_create_new_app(cmd, name)
+
+    # determine the details for app to be created from src contents
+    src_dir = os.getcwd()  # the code to deploy is expected to be the current directory the command is running from
+    # if dir is empty, show a message in dry run
+    do_deployment = not os.listdir(src_dir) == []
+    lang_details = get_lang_from_content(src_dir)
+
+    sku = sku or lang_details['default_sku']
+    location = set_location(cmd, sku, location)
+    language = lang_details['language']
+    os_val = "Linux" if language.lower() == NODE_RUNTIME_NAME \
+                        or language.lower() == PYTHON_RUNTIME_NAME else OS_DEFAULT
+
+    if _create_new_app:
+        _create_new_rg = True  # If RG is given use that else use default one
+        _create_new_asp = True  # if ASP is given use that else use
+    else:
+        _create_new_rg = False  # we can use the existing RG
+        _create_new_asp = False  # we need to some additional checks for windows vs Linux Apps
+    user = get_profile_username()
+
+    if _create_new_rg:
+        rg_name = resource_group_name or get_default_rg_name(user, location, os_val)
+    # need else case here
 
 
 def _ping_scm_site(cmd, resource_group, name):
