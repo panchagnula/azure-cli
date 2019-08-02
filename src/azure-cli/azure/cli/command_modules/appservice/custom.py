@@ -2766,8 +2766,8 @@ def get_history_triggered_webjob(cmd, resource_group_name, name, webjob_name, sl
     return client.web_apps.list_triggered_web_job_history(resource_group_name, name, webjob_name)
 
 
-def webapp_up(cmd, name, resource_group_name=None, plan=None, location=None, sku='F1', dryrun=False, logs=False,  # pylint: disable=too-many-statements,
-              launch_browser=False):
+def webapp_up(cmd, name, resource_group_name=None, plan=None, location=None, sku=None, dryrun=False, logs=False,  # pylint: disable=too-many-statements,
+              launch_browser=False, add_workflow=False):
     import os
     src_dir = os.getcwd()
     _src_path_escaped = "{}".format(src_dir.replace(os.sep, os.sep + os.sep))
@@ -2820,8 +2820,7 @@ def webapp_up(cmd, name, resource_group_name=None, plan=None, location=None, sku
         site_config = client.web_apps.get_configuration(rg_name, name)
     else:  # need to create new app, check if we need to use default RG or use user entered values
         logger.warning("webapp %s doesn't exist", name)
-        sku_value = get_sku_to_use(src_dir, sku)
-        sku = get_sku_name(sku_value)
+        sku = get_sku_to_use(src_dir, sku)
         loc = set_location(cmd, sku, location)
         rg_name = get_rg_to_use(cmd, user, loc, os_name, resource_group_name)
         _is_linux = os_name.lower() == 'linux'
@@ -2838,7 +2837,7 @@ def webapp_up(cmd, name, resource_group_name=None, plan=None, location=None, sku
                 "version_detected": "%s",
                 "runtime_version": "%s"
                 }
-                """ % (name, plan, rg_name, sku, os_name, loc, _src_path_escaped, detected_version, runtime_version)
+                """ % (name, plan, rg_name, get_sku_name(sku), os_name, loc, _src_path_escaped, detected_version, runtime_version)
     create_json = json.loads(dry_run_str)
 
     if dryrun:
@@ -2892,6 +2891,9 @@ def webapp_up(cmd, name, resource_group_name=None, plan=None, location=None, sku
     if logs:
         _configure_default_logging(cmd, rg_name, name)
         return get_streaming_log(cmd, rg_name, name)
+    if add_workflow:
+        workflow = generate_yaml_for_webapp(cmd, name, language)
+        create_json['github-workflow'] = workflow
     with ConfiguredDefaultSetter(cmd.cli_ctx.config, True):
         cmd.cli_ctx.config.set_value('defaults', 'group', rg_name)
         cmd.cli_ctx.config.set_value('defaults', 'sku', sku)
@@ -3069,3 +3071,78 @@ def _configure_default_logging(cmd, rg_name, name):
     return config_diagnostics(cmd, rg_name, name,
                               application_logging=True, web_server_logging='filesystem',
                               docker_container_logging='true')
+
+
+def generate_yaml_for_webapp(cmd, name, runtime="node", branch_name="master", repo_name=None, project=None, github_pat=None):
+    from github import Github
+    import os
+    project = 'bbq-beets'
+    repo = 'WebApps'
+    client = web_client_factory(cmd.cli_ctx)
+    access_token = client.get_source_control("GitHub").token
+    repo_name = '{}/{}'.format(project, repo)
+    if access_token is not None:
+        logger.warning("Authenticating Github user")
+        g = Github(access_token)
+    else:
+        raise CLIError("No GitHub access token found. Please run the command with --github-pat property.")
+    user_name = g.get_user().login
+    logger.warning("User '%s' successfully authenticated", user_name)
+    for repo in g.get_user().get_repos():
+        print(repo.full_name)
+    repo = g.get_repo(repo_name)
+    branch_name = "sisirap-webapps-actions"
+    file_name = 'appsvc-cli.yml'
+    dir_path = "{}/{}".format('.github', 'workflows')
+
+    run_action_str = 'pip install -r requirements.txt' if runtime == 'python' else \
+        '| \n            npm install \n            npm run build --if-present \n            npm run test --if-present'
+    content_string = """on: push
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    # checkout the repo
+    - uses: actions/checkout@master
+
+    # install dependencies, build, and test
+    # cli command detected runtime {}
+    - name: install, build, and test
+      run: {}
+
+    # deploy web app using publish profile credentials
+    - uses: azure/appservice-actions/webapp@master
+      with:
+        app-name: {}
+        publish-profile: {}""".format(runtime, run_action_str, name,
+                                      '${{ secrets.sisirap' + runtime + 'PublishingProfile}}')
+    # print(content_string)
+
+    logger.warning("Generating workflow")
+    file_path = "{}/{}".format(dir_path, file_name)
+    # check if the workflow already exists
+    try:
+        c = repo.get_contents(path=file_path, ref=branch_name)
+        print(c)
+        import base64
+        # encode the appname & check if this exists in c.content
+        _app_byte_str = base64.b64encode(bytes('app-name: ' + name, "utf-8"))
+        _app_encoded = _app_byte_str.decode("utf-8")
+
+        # update the file only if the appname is different from the name given in the yml workflow
+        if _app_encoded in c.content:
+            logger.warning('The workflow "%s" already exists in the github branch "%s". Skipping git push.',
+                           c.path, branch_name)
+        else:
+            logger.warning("Performing a git push of the file '%s' on branch '%s'", c.path, branch_name)
+            repo.update_file(path=c.path, message='updating workflow using CLI', content=content_string, sha=c.sha,
+                             branch=branch_name)
+    except:  # catch *all* exceptions
+        logger.info("")
+        # the api errors when the path is not found, if this is case we create file & push it to the repo
+        logger.warning("Generating the workflow file '%s' and doing a git push of the file to remote branch '%s'",file_name, branch_name)
+        repo.create_file(path=file_path, message="creating workflow using CLI", content=content_string, branch=branch_name)
+    logger.warning("Fetching publishing credentials with secrets for the app '%s'", name)
+    logger.warning("Setting 'publish-profile' secret on github")
+    return file_path

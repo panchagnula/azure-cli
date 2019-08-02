@@ -133,6 +133,9 @@ def load_arguments(self, _):
         c.argument('keep_metrics', action='store_true', help='keep app metrics')
         c.argument('keep_dns_registration', action='store_true', help='keep DNS registration')
 
+    with self.argument_context('webapp create-github-workflow') as c:
+        c.argument('name', arg_type=webapp_name_arg_type)
+
     with self.argument_context('webapp webjob') as c:
         c.argument('webjob_name', help='The name of the webjob', options_list=['--webjob-name', '-w'])
     with self.argument_context('webapp webjob continuous list') as c:
@@ -398,6 +401,7 @@ def load_arguments(self, _):
         c.argument('location', arg_type=get_location_type(self.cli_ctx))
         c.argument('launch_browser', help="Launch the created app using the default browser", default=False, action='store_true', options_list=['--launch-browser', '-b'])
         c.argument('logs', help="Configure default logging required to enable viewing log stream immediately after launching the webapp", default=False, action='store_true')
+        c.argument('add_workflow', help="Create or update a workflow yml file to a github branch", default=False, action='store_true', options_list=['--add-workflow', '-w'])
 
     with self.argument_context('webapp ssh') as c:
         c.argument('port', options_list=['--port', '-p'],
