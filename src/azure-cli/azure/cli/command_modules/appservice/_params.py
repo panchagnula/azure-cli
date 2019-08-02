@@ -254,6 +254,9 @@ def load_arguments(self, _):
     with self.argument_context('webapp config storage-account list') as c:
         c.argument('name', arg_type=webapp_name_arg_type, id_part=None)
 
+    with self.argument_context('webapp config storage-account list') as c:
+        c.argument('name', arg_type=webapp_name_arg_type, id_part=None)
+
     with self.argument_context('webapp config hostname') as c:
         c.argument('webapp_name', help="webapp name. You can configure the default using 'az configure --defaults web=<name>'", configured_default='web',
                    completer=get_resource_name_completion_list('Microsoft.Web/sites'), id_part='name')
@@ -398,6 +401,7 @@ def load_arguments(self, _):
         c.argument('location', arg_type=get_location_type(self.cli_ctx))
         c.argument('launch_browser', help="Launch the created app using the default browser", default=False, action='store_true', options_list=['--launch-browser', '-b'])
         c.argument('logs', help="Configure default logging required to enable viewing log stream immediately after launching the webapp", default=False, action='store_true')
+        c.argument('config_github_actions', help="Create or update a workflow yml file to a github branch", default=False, action='store_true', options_list=['--config-github-actions', '-a'])
 
     with self.argument_context('webapp ssh') as c:
         c.argument('port', options_list=['--port', '-p'],

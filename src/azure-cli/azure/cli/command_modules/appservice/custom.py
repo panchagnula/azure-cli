@@ -60,7 +60,7 @@ from .vsts_cd_provider import VstsContinuousDeliveryProvider
 from ._params import AUTH_TYPES, MULTI_CONTAINER_TYPES, LINUX_RUNTIMES, WINDOWS_RUNTIMES
 from ._client_factory import web_client_factory, ex_handler_factory
 from ._appservice_utils import _generic_site_operation
-from .utils import _normalize_sku, get_sku_name
+from .utils import _normalize_sku, get_sku_name, get_github_actions_yml
 from ._create_util import (zip_contents_from_dir, get_runtime_version_details, create_resource_group, get_app_details,
                            should_create_new_rg, set_location, does_app_already_exist, get_profile_username,
                            get_plan_to_use, get_lang_from_content, get_rg_to_use, get_sku_to_use,
@@ -2767,7 +2767,7 @@ def get_history_triggered_webjob(cmd, resource_group_name, name, webjob_name, sl
 
 
 def webapp_up(cmd, name, resource_group_name=None, plan=None, location=None, sku=None, dryrun=False, logs=False,  # pylint: disable=too-many-statements,
-              launch_browser=False):
+              launch_browser=False, config_github_actions=False):
     import os
     src_dir = os.getcwd()
     _src_path_escaped = "{}".format(src_dir.replace(os.sep, os.sep + os.sep))
@@ -2892,6 +2892,9 @@ def webapp_up(cmd, name, resource_group_name=None, plan=None, location=None, sku
     if logs:
         _configure_default_logging(cmd, rg_name, name)
         return get_streaming_log(cmd, rg_name, name)
+    if config_github_actions:
+        workflow = generate_yaml_for_webapp(cmd, name, language)
+        create_json['github-workflow'] = workflow
     with ConfiguredDefaultSetter(cmd.cli_ctx.config, True):
         cmd.cli_ctx.config.set_value('defaults', 'group', rg_name)
         cmd.cli_ctx.config.set_value('defaults', 'sku', sku)
@@ -3069,3 +3072,96 @@ def _configure_default_logging(cmd, rg_name, name):
     return config_diagnostics(cmd, rg_name, name,
                               application_logging=True, web_server_logging='filesystem',
                               docker_container_logging='true')
+
+
+def generate_yaml_for_webapp(cmd, name, resource_group_name=None, slot=None, branch_name="master", repo_name=None,  # pylint:disable=too-many-statements
+                             project=None, github_pat=None, stack=None):
+    from github import Github
+    import yaml
+    project = 'bbq-beets'
+    repo = 'WebApps'
+    client = web_client_factory(cmd.cli_ctx)
+    github_pat = client.get_source_control("GitHub").token
+    repo_name = '{}/{}'.format(project, repo)
+    if github_pat is not None:
+        logger.warning("Authenticating Github user")
+        g = Github(github_pat)
+    else:
+        # generate the yml locally and log message to user
+        raise CLIError("No GitHub access token found. Please run the command with --github-pat property.")
+    user_name = g.get_user().login
+    logger.warning("User '%s' successfully authenticated", user_name)
+    # for repo in g.get_user().get_repos():
+    # print(repo.full_name)
+    repo = g.get_repo(repo_name)
+    branch_name = "sisirap-webapps-actions"
+    file_name = 'azure-appsvc.yml'
+    dir_path = "{}/{}".format('.github', 'workflows')
+    if stack is None:
+        _app_details = get_app_details(cmd, name)
+        _app_kind = _app_details.kind
+        print(_app_kind)
+        # get kind & then use siteConfig to get the version
+        if resource_group_name is None:
+            resource_group_name = _app_details.resource_group
+        site_config_details = _generic_site_operation(cmd.cli_ctx, resource_group_name, name, 'get_configuration', slot)
+        print(site_config_details)
+    stack = "Node"
+    run_action_str = 'pip install -r requirements.txt' if stack == 'python' else \
+        '| \n            npm install \n            npm run build --if-present \n            npm run test --if-present'
+    content_string = """on: push
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    # checkout the repo
+    - uses: actions/checkout@master
+
+    # install dependencies, build, and test
+    # cli command detected runtime {}
+    - name: install, build, and test
+      run: {}
+
+    # deploy web app using publish profile credentials
+    - uses: azure/appservice-actions/webapp@master
+      with:
+        app-name: {}
+        publish-profile: {}""".format(stack, run_action_str, name,
+                                      '${{ secrets.sisirap' + stack + 'PublishingProfile}}')
+    # print(content_string)
+    logger.warning("Generating workflow")
+    file_path = "{}/{}".format(dir_path, file_name)
+    workflow_dict = get_github_actions_yml(user_name, stack, name)
+    # file_yaml = "G:\\github-actions\\WebApps\\.github\\workflows\\appsvc-cli.yml"
+    # with open(file_yaml) as f:
+    # d = yaml.load(f, Loader=yaml.FullLoader)
+    # print(d)
+    with open(file_path, 'w') as yaml_file:
+        yaml.dump(workflow_dict, yaml_file, default_flow_style=False)
+
+    # check if the workflow already exists
+    try:
+        c = repo.get_contents(path=file_path, ref=branch_name)
+        print(c.content)
+        import base64
+        # encode the appname & check if this exists in c.content
+        _app_byte_str = base64.b64encode(bytes('app-name: ' + name, "utf-8"))
+        _app_encoded = _app_byte_str.decode("utf-8")
+
+        # update the file only if the appname is different from the name given in the yml workflow
+        if _app_encoded in c.content:
+            logger.warning('The workflow "%s" already exists in the github branch "%s". Skipping git push.',
+                           c.path, branch_name)
+        else:
+            logger.warning("Performing a git push of the file '%s' on branch '%s'", c.path, branch_name)
+            repo.update_file(path=c.path, message='updating workflow using CLI', content=content_string, sha=c.sha,
+                             branch=branch_name)
+    except:  # catch *all* exceptions
+        # the api errors when the path is not found, if this is case we create file & push it to the repo
+        logger.warning("Generating the workflow file '%s' and doing a git push of the file to remote branch '%s'",
+                       file_name, branch_name)
+        repo.create_file(path=file_path, message="creating workflow using CLI", content=content_string,
+                         branch=branch_name)
+    logger.warning("Fetching publishing credentials with secrets for the app '%s'", name)
+    logger.warning("Setting 'publish-profile' secret on github")
+    return file_path

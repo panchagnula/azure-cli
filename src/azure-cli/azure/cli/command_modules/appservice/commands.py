@@ -92,6 +92,7 @@ def load_command_table(self, _):
         g.custom_command('identity remove', 'remove_identity', validator=validate_app_or_slot_exists_in_rg)
         g.custom_command('create-remote-connection', 'create_tunnel', exception_handler=ex_handler_factory())
         g.generic_update_command('update', getter_name='get_webapp', setter_name='set_webapp', custom_func_name='update_webapp', command_type=appservice_custom)
+        g.custom_command('create-github-workflow', 'generate_yaml_for_webapp')
 
     with self.command_group('webapp traffic-routing') as g:
         g.custom_command('set', 'set_traffic_routing')
@@ -106,6 +107,7 @@ def load_command_table(self, _):
     with self.command_group('webapp config') as g:
         g.custom_command('set', 'update_site_configs')
         g.custom_show_command('show', 'get_site_configs')
+        g.custom_command('github-actions', 'generate_yaml_for_webapp')
 
     with self.command_group('webapp config appsettings') as g:
         g.custom_command('list', 'get_app_settings', exception_handler=empty_on_404)

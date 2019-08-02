@@ -326,7 +326,7 @@ def get_profile_username():
 def get_sku_to_use(src_dir, sku=None):
     if sku is None:
         lang_details = get_lang_from_content(src_dir)
-        return lang_details.get("default_sku")
+        return lang_details['default_sku']
     logger.info("Found sku argument, skipping use default sku")
     return sku
 

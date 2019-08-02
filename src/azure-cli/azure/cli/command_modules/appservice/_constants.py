@@ -13,7 +13,8 @@ NODE_RUNTIME_NAME = "node"
 PYTHON_RUNTIME_NAME = "python"
 OS_DEFAULT = "Windows"
 STATIC_RUNTIME_NAME = "static"  # not an official supported runtime but used for CLI logic
-NODE_VERSIONS = ['4.4', '4.5', '6.2', '6.6', '6.9', '6.11', '8.0', '8.1', '8.9', '8.11', '10.1', '10.10', '10.14']
+NODE_VERSIONS = ['4.4', '4.5', '4.8', '6.2', '6.6', '6.9', '6.10', '6.11', '8.0', '8.1', '8.2', '8.8', '8.9', '8.11',
+                 '8.12', '9.4', '10.1', '10.10', '10.12', '10.14']
 PYTHON_VERSIONS = ['3.7', '3.6', '2.7']
 NETCORE_VERSIONS = ['1.0', '1.1', '2.1', '2.2']
 DOTNET_VERSIONS = ['3.5', '4.7']

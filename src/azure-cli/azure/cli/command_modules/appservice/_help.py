@@ -874,6 +874,19 @@ examples:
     crafted: true
 """
 
+helps['webapp config github-actions'] = """
+type: command
+short-summary: Create github actions workflow
+examples:
+  - name: turn on "alwaysOn"
+    text: >
+        az webapp config set -g MyResourceGroup -n MyUniqueApp --always-on true
+  - name: turn on "alwaysOn" through a json with content "{\"alwaysOn\", true}"
+    text: >
+        az webapp config set -g MyResourceGroup -n MyUniqueApp --generic-configurations "{\"alwaysOn\": true}"
+
+"""
+
 helps['webapp config snapshot'] = """
 type: group
 short-summary: Manage web app snapshots.

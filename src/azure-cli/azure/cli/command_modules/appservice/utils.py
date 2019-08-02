@@ -46,3 +46,40 @@ def get_sku_name(tier):  # pylint: disable=too-many-return-statements
     if tier in ['I1', 'I2', 'I3']:
         return 'Isolated'
     raise CLIError("Invalid sku(pricing tier), please refer to command help for valid values")
+
+
+def _get_github_build_obj(stack):
+    stack = stack.upper()
+    if stack == 'PYTHON':
+        return 'pip install -r requirements.txt'
+    if stack == 'NODE':
+        return 'npm install npm run build --if-present npm run test --if-present'
+    return ''
+
+
+def get_github_actions_yml(user, stack, name, type="app"):
+    # type is used to differentiate if this simple app or container appß
+    run_action_obj = _get_github_build_obj(stack)
+    secrets_value = '${{{{secrets.{}{}PublishingProfile}}}}'.format(user, stack)
+    if type == "app":
+        workflow_dict = {
+            'on': 'push',
+            'jobs': {'build-and-deploy': {'runs-on': 'ubuntu-latest', 'steps': [{'uses': 'actions/checkout@master'},
+                                                                                {'name': 'install, build, and test',
+                                                                                 'run': run_action_obj},
+                                                                                {'uses': 'azure/appservice-actions/'
+                                                                                         'webapp@master',
+                                                                                 'with': {'app-name': name,
+                                                                                          'publish-profile': secrets_value
+                                                                                          }}]}}}
+    else: # assume it's container
+        workflow_dict = {}
+    return workflow_dict
+
+
+def get_runtime_from_kind(kind, site_config_details):
+    kind = kind.lower()
+    if 'linux' in kind:
+        return site_config_details.linux_fx_version
+    # if kind == 'app':  # for windows webapps the kind is app
+    return site_config_details.netFrameworkVersion
