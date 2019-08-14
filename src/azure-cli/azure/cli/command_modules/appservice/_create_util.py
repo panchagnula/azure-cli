@@ -11,7 +11,7 @@ from azure.mgmt.resource.resources.models import ResourceGroup
 from ._constants import (NETCORE_VERSION_DEFAULT, NETCORE_VERSIONS, NODE_VERSION_DEFAULT,
                          NODE_VERSIONS, NETCORE_RUNTIME_NAME, NODE_RUNTIME_NAME, DOTNET_RUNTIME_NAME,
                          DOTNET_VERSION_DEFAULT, DOTNET_VERSIONS, STATIC_RUNTIME_NAME,
-                         PYTHON_RUNTIME_NAME, PYTHON_VERSION_DEFAULT, LINUX_SKU_DEFAULT)
+                         PYTHON_RUNTIME_NAME, PYTHON_VERSION_DEFAULT, LINUX_SKU_DEFAULT, OS_DEFAULT)
 
 logger = get_logger(__name__)
 
@@ -117,7 +117,9 @@ def get_lang_from_content(src_path):
     package_python_file = os.path.join(src_path, 'requirements.txt')
     package_netcore_file = ""
     static_html_file = ""
-
+    runtime_details_dict['language'] = NETCORE_RUNTIME_NAME  # default to windows
+    runtime_details_dict['file_loc'] = ''
+    runtime_details_dict['default_sku'] = 'F1'
     import fnmatch
     for _dirpath, _dirnames, files in os.walk(src_path):
         for file in files:
@@ -266,8 +268,10 @@ def set_location(cmd, sku, location):
         available_locs = []
         for loc in locs:
             available_locs.append(loc.name)
-        return available_locs[0]
-    return location
+        loc = available_locs[0]
+    else:
+        loc = location
+    return loc.replace(" ", "").lower()
 
 
 # check if the RG value to use already exists and follows the OS requirements or new RG to be created
@@ -278,12 +282,28 @@ def should_create_new_rg(cmd, rg_name, is_linux):
     return True
 
 
-def should_create_new_app(cmd, name):
+def does_app_already_exist(cmd, name):
     """ This is used by az webapp up to verify if a site needs to be created or should just be deployed"""
     client = web_client_factory(cmd.cli_ctx)
     site_availability = client.check_name_availability(name, 'Microsoft.Web/sites')
     # check availability returns true to name_available  == site does not exist
     return site_availability.name_available
+
+
+def get_app_details(cmd, name):
+    client = web_client_factory(cmd.cli_ctx)
+    data = (list(filter(lambda x: name.lower() in x.name.lower(), client.web_apps.list())))
+    if len(data) > 0:
+        return data[0]
+    return None
+
+
+def get_rg_to_use(user, loc, os, rg_name=None):
+    if rg_name is None:
+        logger.info('Using default ResourceGroup value')
+        return "{}_rg_{}_{}".format(user, os, loc.replace(" ", "").lower())
+    else:
+        return rg_name
 
 
 def get_profile_username():
@@ -292,12 +312,93 @@ def get_profile_username():
     user = user.split('@', 1)[0]
     if len(user.split('#', 1)) > 1:  # on cloudShell user is in format live.com#user@domain.com
         user = user.split('#', 1)[1]
-    logger.info("UserPrefix to use '%s'", user)
     return user
 
 
-def get_default_rg_name(user, os, loc):
-    logger.info('Using default ResourceGroup value')
-    return "{}_rg_{}_{}".format(user, os, loc.replace(" ", "").lower())
+def get_sku_to_use(src_dir, sku=None):
+    if sku is None:
+        lang_details = get_lang_from_content(src_dir)
+        return lang_details.get("default_sku")
+    else:
+        logger.info("Found sku argument, skipping use default sku")
+        return sku
+
+
+def set_language(src_dir):
+    lang_details = get_lang_from_content(src_dir)
+    return lang_details.get('language')
+
+
+def get_os(src_dir):
+    lang_details = get_lang_from_content(src_dir)
+    language = lang_details.get('language')
+    return "Linux" if language is not None and language.lower() == NODE_RUNTIME_NAME \
+                        or language.lower() == PYTHON_RUNTIME_NAME else OS_DEFAULT
+
+
+def get_plan_to_use(cmd, user, os, loc, sku, resource_group_name, should_create_rg, plan=None):
+    client = web_client_factory(cmd.cli_ctx)
+    _is_linux = True if os.lower() == 'linux' else False
+    _default_asp = "{}_asp_{}_{}_0".format(user, os, loc)
+    _create_new_asp = True
+    if not should_create_rg and plan is None:
+        print("Plan is none")
+        # scenario where we get RG from user but no plan
+        data = (list(filter(lambda x: sku.lower() in x.sku.name.lower() and _is_linux == x.reserved,
+                            client.app_service_plans.list_by_resource_group(resource_group_name))))
+
+        data_sorted = (sorted(data, key=lambda x: x.name))
+        if len(data_sorted) > 0:
+            plan_to_use = data_sorted[0].name
+            _create_new_asp = False
+        else:
+            plan_to_use = _determine_if_default_plan_to_use(_default_asp, resource_group_name)
+            _create_new_asp = False
+    elif not should_create_rg and plan:
+        # check the plan can be used with the rest of the configuration like SKU & OS
+        data = (list(filter(lambda x: sku.lower() in x.sku.name.lower() and loc.tolower() == x.location.tolower() and
+                            _is_linux == x.reserved and plan.tolower() == x.name.tolower(),
+                            client.app_service_plans.list_by_resource_group(resource_group_name))))
+        data_sorted = (sorted(data, key=lambda x: x.name))
+        plan_to_use = data_sorted[0].name if len(data_sorted) > 0 \
+            else _determine_if_default_plan_to_use(_default_asp, resource_group_name)
+        _create_new_asp = False
+    else:
+        plan_to_use = _default_asp
+    return {'plan': plan_to_use, 'exists': not _create_new_asp}
+
+
+# az webapp up uses a default ASP as {}_asp_{}_{}_num
+# this logic check if the default already exists & can be used with current configuration of SKU & OS
+# else we use the
+def _determine_if_default_plan_to_use(cmd, plan_name, resource_group_name, loc, sku):
+    client = web_client_factory(cmd.cli_ctx)
+    # check to see if ASP exists in RG & can be used or needs a new one to be created
+    data = client.app_service_plans.get(resource_group_name, plan_name)
+    if data is not None: # the ASP exists, need to check if this can be used with the current configuration
+        asp_item = next((a for a in data if a.sku.name.lower() == sku.lower() and a.location.lower() == loc.lower()), None)
+    else: # ASP with the default name doesn't exist in RG so we can use that name
+        asp_item = plan_name
+    if asp_item is None:  # this means that plan with the name but cannot be used with the configuration of SKU, loc
+        # we get all ASP that might exist with the name format "{}_asp_{}_{}_num"
+        # get the one with the highest & add 1 to the num
+        _asp_generic = plan_name[:-len(plan_name.split("_")[4])]  # returns the name as user_asp_os_loc
+        d = list(filter(lambda x: _asp_generic in x.name, client.app_service_plans.list_by_resource_group(resource_group_name)))
+        data_sorted = (sorted(d, key=lambda x: x.name))
+        selected_asp = data_sorted[0]
+        print('selected_asp is')
+        print(selected_asp)
+        asp_item = selected_asp.name
+        print(asp_item)
+        # _asp_num = int(_plan_info.name.split('_')[4]) + 1
+        #asp = "{}_asp_{}_{}_{}".format(user, os, loc, _asp_num)
+    return asp_item
+
+
+
+
+
+
+
 
 
