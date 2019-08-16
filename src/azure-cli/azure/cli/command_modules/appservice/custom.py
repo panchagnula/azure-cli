@@ -63,7 +63,7 @@ from ._appservice_utils import _generic_site_operation
 from .utils import _normalize_sku, get_sku_name
 from ._create_util import (zip_contents_from_dir, get_runtime_version_details, create_resource_group, get_app_details,
                            should_create_new_rg, set_location, does_app_already_exist, get_profile_username, get_plan_to_use,
-                           get_lang_from_content, get_num_apps_in_asp, get_rg_to_use, get_sku_to_use, get_os)
+                           get_lang_from_content, get_num_apps_in_asp, get_rg_to_use, get_sku_to_use, detect_os_form_srcDir)
 from ._constants import (NODE_RUNTIME_NAME, OS_DEFAULT, STATIC_RUNTIME_NAME, PYTHON_RUNTIME_NAME,
                          RUNTIME_TO_IMAGE, NODE_VERSION_DEFAULT)
 
@@ -2967,23 +2967,35 @@ def webapp_up_new(cmd, name, resource_group_name=None, plan=None,  # pylint: dis
     import json
     src_dir = os.getcwd()
     _src_path_escaped = "{}".format(src_dir.replace(os.sep, os.sep + os.sep))
-    print(_src_path_escaped)
     client = web_client_factory(cmd.cli_ctx)
     user = get_profile_username()
     _create_new_rg = False
     _create_new_asp = False
     _create_new_app = does_app_already_exist(cmd, name)
-    os = get_os(src_dir)
+    os = detect_os_form_srcDir(src_dir)
     if not _create_new_app:  # App exists
         # Get the ASP & RG info, if the ASP & RG parameters are provided we use those else we need to find those
-        print("App exists")
+        logger.warning("Webapp {} already exits. The command will deploy contents to the existing app".format(name))
         app_details = get_app_details(cmd, name)
-        rg_name = resource_group_name or app_details.resource_group
-        loc = app_details.location.replace(" ", "").lower()
+        current_rg = app_details.resource_group
+        if resource_group_name is not None and (resource_group_name.lower() != current_rg.lower()):
+            raise CLIError("The webapp {} exists in ResourceGroup {} and does not match the value entered {}."
+                           " Please re-run command with the correct parameters.". format(name, current_rg, resource_group_name))
+        rg_name = resource_group_name or current_rg
+        loc = location.replace(" ", "").lower() or app_details.location.replace(" ", "").lower()
         plan_details = parse_resource_id(app_details.server_farm_id)
-        plan = plan or plan_details['resource_name']
+        current_plan = plan_details['name']
+        if plan is not None and current_plan.lower() != plan.lower():
+            raise CLIError("The plan name entered {} does not match the plan name that the webapp is hosted in {}."
+                           "Please re-run command with the correct parameters".format(plan, current_plan))
+        plan = plan or plan_details['name']
         plan_info = client.app_service_plans.get(rg_name, plan)
         sku = plan_info.sku.tier if isinstance(plan_info, AppServicePlan) else 'Free'
+        current_os = 'Linux' if plan_info.reserved else 'Windows'
+        # Raise error if current OS of the app is different from the current one
+        if current_os.lower() != os.lower():
+            raise CLIError("The webapp {} is a {} app. The code detected at '{}' will default to '{}'. "
+                           "Please create a new app to continue this operation.".format(name, current_os, src_dir, os))
     else:  # need to create new app, check if we need to use default RG or use user entered values
         print("App doesn't exist")
         sku = get_sku_to_use(src_dir, sku)
@@ -2993,7 +3005,7 @@ def webapp_up_new(cmd, name, resource_group_name=None, plan=None,  # pylint: dis
         plan_output = get_plan_to_use(cmd, user, os, loc, sku, rg_name, _create_new_rg, plan)
         plan = plan_output['plan']
         _create_new_asp = not plan_output['exists']
-        dry_run_str = r""" {
+    dry_run_str = r""" {
                 "name" : "%s",
                 "appserviceplan" : "%s",
                 "resourcegroup" : "%s",
@@ -3002,11 +3014,9 @@ def webapp_up_new(cmd, name, resource_group_name=None, plan=None,  # pylint: dis
                 "location" : "%s",
                 "src_path" : "%s"
                 }
-                """ % (name, plan, rg_name, sku, os, location, _src_path_escaped)
-        create_json = json.loads(dry_run_str)
-    print(src_dir)
+                """ % (name, plan, rg_name, sku, os, loc, _src_path_escaped)
+    create_json = json.loads(dry_run_str)
     return create_json
-
 
 
 def _ping_scm_site(cmd, resource_group, name):

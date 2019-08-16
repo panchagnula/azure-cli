@@ -329,7 +329,7 @@ def set_language(src_dir):
     return lang_details.get('language')
 
 
-def get_os(src_dir):
+def detect_os_form_srcDir(src_dir):
     lang_details = get_lang_from_content(src_dir)
     language = lang_details.get('language')
     return "Linux" if language is not None and language.lower() == NODE_RUNTIME_NAME \
@@ -356,12 +356,12 @@ def get_plan_to_use(cmd, user, os, loc, sku, resource_group_name, should_create_
             _create_new_asp = False
     elif not should_create_rg and plan:
         # check the plan can be used with the rest of the configuration like SKU & OS
-        data = (list(filter(lambda x: sku.lower() in x.sku.name.lower() and loc.tolower() == x.location.tolower() and
-                            _is_linux == x.reserved and plan.tolower() == x.name.tolower(),
+        data = (list(filter(lambda x: sku.lower() in x.sku.name.lower() and loc.lower() == x.location.lower() and
+                            _is_linux == x.reserved and plan.lower() == x.name.lower(),
                             client.app_service_plans.list_by_resource_group(resource_group_name))))
         data_sorted = (sorted(data, key=lambda x: x.name))
         plan_to_use = data_sorted[0].name if len(data_sorted) > 0 \
-            else _determine_if_default_plan_to_use(_default_asp, resource_group_name)
+            else _determine_if_default_plan_to_use(cmd, _default_asp, resource_group_name, loc, sku)
         _create_new_asp = False
     else:
         plan_to_use = _default_asp
@@ -375,11 +375,9 @@ def _determine_if_default_plan_to_use(cmd, plan_name, resource_group_name, loc, 
     client = web_client_factory(cmd.cli_ctx)
     # check to see if ASP exists in RG & can be used or needs a new one to be created
     data = client.app_service_plans.get(resource_group_name, plan_name)
-    if data is not None: # the ASP exists, need to check if this can be used with the current configuration
-        asp_item = next((a for a in data if a.sku.name.lower() == sku.lower() and a.location.lower() == loc.lower()), None)
-    else: # ASP with the default name doesn't exist in RG so we can use that name
-        asp_item = plan_name
-    if asp_item is None:  # this means that plan with the name but cannot be used with the configuration of SKU, loc
+    if data is not None and data.sku.name.lower() == sku.lower() and data.location.lower() == loc.lower():  # the ASP exists, need to check if this can be used with the current configuration
+        asp_item = data.name
+    else:  # this means that plan with the name exists but cannot be used with the configuration of SKU, loc
         # we get all ASP that might exist with the name format "{}_asp_{}_{}_num"
         # get the one with the highest & add 1 to the num
         _asp_generic = plan_name[:-len(plan_name.split("_")[4])]  # returns the name as user_asp_os_loc
